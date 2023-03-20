@@ -3,10 +3,12 @@ import os
 import time
 import torch
 from skimage import io
-import pandas as pd
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from torchvision import transforms
 import matplotlib.pyplot as plt
+from glob import glob
+import json
+
 
 dev_str = "cuda" if torch.cuda.is_available() else "cpu"
 dev_str = "cpu" if torch.has_mps else dev_str
@@ -15,8 +17,8 @@ device = torch.device(dev_str)
 #----------------------#
 #   Dataset creation   #
 #----------------------#
-class Dataset_dn(Dataset):
-    def __init__(self, csv_file, root_dir, rescale, transform=False):
+class Dataset_classifier(Dataset):
+    def __init__(self, data_path, rescale, transform=False):
         """
         Args:
             csv_file (string): Path to the csv file with annotations.
@@ -24,32 +26,39 @@ class Dataset_dn(Dataset):
             transform (callable, optional): Optional transform to be applied
                 on a sample.
         """
-        self.df_image_labels = pd.read_csv(csv_file)
-        self.root_dir = root_dir
+
+        self.label_path = data_path + "/labels"
+        self.image_path = data_path + "/images"
+        self.label_list = [os.path.splitext(os.path.basename(x))[0] for x in glob(self.label_path + "/*.json")]
+        self.image_list = [os.path.basename(x) for x in glob(self.image_path  + "/*.jpg")] + [os.path.basename(x) for x in glob(self.image_path  + "/*.png")]
         self.transform = transform
         self.rescale = rescale
 
     def __len__(self):
-        return len(self.df_image_labels)
+        return len(self.label_list)
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        img_name = os.path.join(self.root_dir,
-                                self.df_image_labels.iloc[idx, 0])
-        image = io.imread(img_name)
-        if self.transform == True:
-            # ChosenTransforms = transforms.Compose([transforms.ToTensor(),
-            #     transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225]),])            
-            ChosenTransforms = transforms.Compose(
-                [transforms.ToTensor(),
-                transforms.Resize(self.rescale),
-                transforms.Normalize(mean=[0.0, 0.0, 0.0],std=[1.0, 1.0, 1.0])])
-            image = ChosenTransforms(image)
-        label = self.df_image_labels.iloc[idx, 1]
-        label = torch.tensor(label)
-        sample = {'image': image, 'label': label}
+        if os.path.splitext(self.image_list[idx])[0] in self.label_list:
+            img_path = self.image_path + "/" + self.image_list[idx]
+            image = io.imread(img_path)
+            if self.transform == True:
+                # ChosenTransforms = transforms.Compose([transforms.ToTensor(),
+                #     transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225]),])            
+                ChosenTransforms = transforms.Compose(
+                    [transforms.ToTensor(),
+                    transforms.Resize((self.rescale, self.rescale)),
+                    transforms.Normalize(mean=[0.0, 0.0, 0.0],std=[1.0, 1.0, 1.0])])
+                image = ChosenTransforms(image)
+
+            label_path = self.label_path + "/" + os.path.splitext(self.image_list[idx])[0] + ".json"
+            f = open(label_path)
+            data = json.load(f)
+            label = data['class_id']
+            label = torch.tensor(label)
+            sample = {'image': image, 'label': label}
 
         return sample
 
@@ -84,7 +93,7 @@ def imshow(inp, title=None):
         plt.title(title)
     plt.pause(0.001) 
 
-def visualize_model(model, dataloader, label_map, num_images=6):
+def visualize_model(model, dataloader, label_map, fig_save_path, num_images=6):
     was_training = model.training
     model.eval()
     images_so_far = 0
@@ -97,15 +106,18 @@ def visualize_model(model, dataloader, label_map, num_images=6):
             outputs = model(inputs)
             _, preds = torch.max(outputs, 1)
 
+            fig = plt.figure()
             for j in range(inputs.size()[0]):
                 images_so_far += 1
-                ax = plt.subplot(num_images//2, 2, images_so_far)
+                ax = fig.add_subplot(num_images//2, 2, images_so_far)
                 ax.axis('off')
-                ax.set_title('predicted: {}, correct: {}'.format(label_map[preds[j]], label_map[d['label'].numpy()[j]]))
+                ax.set_title('P: {}, C: {}'.format(label_map[preds.cpu().numpy()[j]], label_map[d['label'].numpy()[j]]))
                 imshow(inputs.cpu().data[j])
 
                 if images_so_far == num_images:
                     model.train(mode=was_training)
+                    print("Figure save path:", fig_save_path)
+                    fig.savefig(str(fig_save_path))
                     return
         model.train(mode=was_training)
 

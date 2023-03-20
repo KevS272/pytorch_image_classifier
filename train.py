@@ -23,8 +23,20 @@ from utilities import *
 import time
 import datetime
 import copy
+import argparse
+import sys
+from pathlib import Path
+import yaml
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 warnings.filterwarnings("ignore")
 plt.ion()   # interactive mode
+
+FILE = Path(__file__).resolve()
+ROOT = FILE.parents[0]  # <-- this is the root directory
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))  # add ROOT to PATH
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 dev_str = "cuda" if torch.cuda.is_available() else "cpu"
 dev_str = "cpu" if torch.has_mps else dev_str
@@ -34,35 +46,12 @@ print("Used device for training: ",device)
 #%%-----------------------------------------------#
 #   Define data directories and hyperparameters   #
 #-------------------------------------------------#
-# Dirs
-TRAIN_DIR = "sets/train_dn/labels.csv"
-IM_TRAIN_DIR = "sets/train_dn/images/"
-VALID_DIR = "sets/valid_dn/labels.csv"
-IM_VALID_DIR = "sets/valid_dn/images/"
-MODELPATH = 'weights/'
-LABELMAP = ("day", "night")
-
-# Hyperparameters
-ENABLECOMET = False
-BATCHSIZE = 8
-EPOCHS = 2
-IMSIZE = 640 # rescales to that value
-NUMCLASSES = len(LABELMAP)
-LEARNRATE = 0.001
-SAVEWEIGHTS = True
 
 
 #%%----------------------#
 #   Train model method   #
 #------------------------#
-def train_model(model, dataloaders, dataset_sizes, criterion, optimizer, scheduler, num_epochs):
-    print("#--------------------#")
-    print("#   Start training   #")
-    print("#--------------------#")
-    print("Training parameters: ")
-    print(" ")
-    for key, value in hyper_params.items():
-        print(key, ' : ', value)
+def train_model(model, dataloaders, dataset_sizes, criterion, optimizer, scheduler, num_epochs, experiment = None):
 
     since = time.time()
 
@@ -80,14 +69,16 @@ def train_model(model, dataloaders, dataset_sizes, criterion, optimizer, schedul
         for phase in ['train', 'val']:
             if phase == 'train':
                 model.train()  # Set model to training mode
+                print("Training")
             else:
                 model.eval()   # Set model to evaluate mode
+                print("Validating")
 
             running_loss = 0.0
             running_corrects = 0
 
             # Iterate over data.
-            for d in dataloaders[phase]:
+            for d in tqdm(dataloaders[phase]):
 
                 the_input = d['image'].to(device)
                 the_label = d['label'].to(device)
@@ -116,10 +107,10 @@ def train_model(model, dataloaders, dataset_sizes, criterion, optimizer, schedul
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = running_corrects.double() / dataset_sizes[phase]
 
-            if phase == 'train' and ENABLECOMET:
+            if phase == 'train' and (experiment != None):
                 experiment.log_metric("train_accuracy", epoch_acc, epoch=epoch)
                 experiment.log_metric("train_loss", epoch_loss, epoch=epoch)
-            elif phase == 'val' and ENABLECOMET:
+            elif phase == 'val' and (experiment != None):
                 experiment.log_metric("val_accuracy", epoch_acc, epoch=epoch)
                 experiment.log_metric("val_loss", epoch_loss, epoch=epoch)
 
@@ -143,92 +134,150 @@ def train_model(model, dataloaders, dataset_sizes, criterion, optimizer, schedul
     return model
 
 
-#%%--------------------------------------------------#
-#   Setup comet connection and log hyperparameters   #
-#----------------------------------------------------#
-hyper_params = {
+#%%-------------------#
+#   Parse arguments   #
+#---------------------#
+def parse_opt(known=False):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
+    parser.add_argument('--batch_size', type=int, default=64, help='batch size')
+    parser.add_argument('--learn_rate', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/fsoco.yaml', help='dataset.yaml path')
+    parser.add_argument('--save_weights', type=bool, default=True, help='save weights')
+    parser.add_argument('--img_size', type=int, default=20, help='image size')
+    parser.add_argument('--enable_comet', type=bool, default=False, help='enable comet.ml')
+    parser.add_argument('--device', default='', help='cuda, cpu or mps for Aplle devices')
+    parser.add_argument('--save_dir', type=str, default='weights', help='directory to save weights')
+
+    return parser.parse_known_args()[0] if known else parser.parse_args()
+
+def main(opt):
+    print("Train args: ", vars(opt))
+
+    epochs, batch_size, learn_rate, data, save_weights, img_size, enable_comet, device, save_dir = opt.epochs, opt.batch_size, opt.learn_rate, opt.data, opt.save_weights, opt.img_size, opt.enable_comet, opt.device, opt.save_dir
+
+    if device == '':
+        dev_str = "cuda" if torch.cuda.is_available() else "cpu"
+        dev_str = "cpu" if torch.has_mps else dev_str
+        device = torch.device(dev_str)
+    else:
+        device = torch.device(device)
+    print("Used device for training: ",device)
+
+######################################################################################
+
+    with open(data, "r") as stream:
+        try:
+            data = yaml.safe_load(stream)
+        except yaml.YAMLError as exc:
+            print(exc)
+
+    for k in 'train', 'val', 'names':
+        assert k in data, f" data.yaml '{k}:' field missing"
+    if isinstance(data['names'], (list, tuple)):  # old array format
+        data['names'] = dict(enumerate(data['names']))  # convert to dict
+    assert all(isinstance(k, int) for k in data['names'].keys()), 'data.yaml names keys must be integers, i.e. 2: car'
+    data['nc'] = len(data['names'])
+
+    path = Path(data.get('path'))
+    if not path.is_absolute():
+        path = (ROOT / path).resolve()
+        data['path'] = path  # download scripts
+    for k in 'train', 'val', 'test':
+        if data.get(k):  # prepend path
+            if isinstance(data[k], str):
+                x = (path / data[k]).resolve()
+                if not x.exists() and data[k].startswith('../'):
+                    x = (path / data[k][3:]).resolve()
+                data[k] = str(x)
+            else:
+                data[k] = [str((path / x).resolve()) for x in data[k]]
+
+    train_path, val_path = data['train'], data['val']
+
+    print("train_path: ", train_path)
+    print("val_path: ", val_path)
+
+######################################################################################
+
+    hyper_params = {
         # "sequence_length": 28,
-        "input_size": IMSIZE,
+        "input_size": img_size,
         # "hidden_size": 128,
         # "num_layers": 2,
-        "num_classes": NUMCLASSES,
-        "batch_size": BATCHSIZE,
-        "num_epochs": EPOCHS,
-        "learning_rate": LEARNRATE
-}
-if ENABLECOMET:
-    # Add your CometML info to track your training online
-    experiment = Experiment(
-        api_key="",
-        project_name="",
-        workspace="",
-    )
-    experiment.log_parameters(hyper_params)
+        "num_classes": data['nc'],
+        "batch_size": batch_size,
+        "num_epochs": epochs,
+        "learning_rate": learn_rate
+    }
+    if enable_comet:
+        # Add your CometML info to track your training online
+        experiment = Experiment(
+            api_key="",
+            project_name="",
+            workspace="",
+        )
+        experiment.log_parameters(hyper_params)
 
+######################################################################################
 
-#%%-----------------------------------------------------#
-#   Loading the data and put them into the dataloader   #
-#-------------------------------------------------------#
-ds_train = Dataset_dn(csv_file=TRAIN_DIR, root_dir=IM_TRAIN_DIR, rescale=IMSIZE, transform=True)
-ds_valid = Dataset_dn(csv_file=VALID_DIR, root_dir=IM_VALID_DIR, rescale=IMSIZE, transform=True)
+    # TODO: Change Dataset class to work with the json format
+    ds_train = Dataset_classifier(data_path=train_path, rescale=img_size, transform=True)
+    ds_valid = Dataset_classifier(data_path=val_path, rescale=img_size, transform=True)
 
-train_loader = DataLoader(dataset=ds_train, batch_size=BATCHSIZE, shuffle=True)
-valid_loader = DataLoader(dataset=ds_valid, batch_size=BATCHSIZE, shuffle=True)
+    print("Train dataset size: ", ds_train.__len__())
+    print("Validation dataset size: ", ds_valid.__len__())
 
-dataloaders   = {'train': train_loader,  'val': valid_loader }
-dataset_sizes = {'train': len(ds_train), 'val': len(ds_valid)}
+    train_loader = DataLoader(dataset=ds_train, batch_size=batch_size, shuffle=True)
+    valid_loader = DataLoader(dataset=ds_valid, batch_size=batch_size, shuffle=True)
 
+    dataloaders   = {'train': train_loader,  'val': valid_loader }
+    dataset_sizes = {'train': len(ds_train), 'val': len(ds_valid)}
 
-#%%--------------------------------------------#
-#   Load model and define tools for training   #
-#----------------------------------------------#
+    # Loading the model
+    # model = mobilenet_v3_large()
+    # model = torchvision.models.mobilenet_v3_small(weights=True, width_mult=1.0,  reduced_tail=False, dilated=False)
+    model = mobilenet_v3_large(weights=MobileNet_V3_Large_QuantizedWeights, width_mult=1.0,  reduced_tail=False, dilated=False)
 
-# Loading the model
-# model = mobilenet_v3_large()
-# model = torchvision.models.mobilenet_v3_small(weights=True, width_mult=1.0,  reduced_tail=False, dilated=False)
-model = mobilenet_v3_large(weights=MobileNet_V3_Large_QuantizedWeights, width_mult=1.0,  reduced_tail=False, dilated=False)
+    # Set training tools
+    for param in model.parameters():
+        param.requires_grad = False
+    # Parameters of newly constructed modules have requires_grad=True by default
+    num_ftrs = model.classifier[0].in_features
+    # Here the size of each output sample is set to 2. Alternatively, it can be generalized to nn.Linear(num_ftrs, len(class_names)).
+    model.classifier = nn.Linear(num_ftrs, data['nc'])
+    model = model.to(device)
+    criterion = nn.CrossEntropyLoss()
+    # Observe that only parameters of final layer are being optimized as opposed to before.
+    optimizer = optim.SGD(model.classifier.parameters(), lr=learn_rate, momentum=0.9)
+    # Decay LR by a factor of 0.1 every 7 epochs
+    exp_lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size= round(batch_size/10) if (round(batch_size/10) >= 1) else 1, gamma=0.5)
 
-# Set training tools
-for param in model.parameters():
-    param.requires_grad = False
-# Parameters of newly constructed modules have requires_grad=True by default
-num_ftrs = model.classifier[0].in_features
-# Here the size of each output sample is set to 2. Alternatively, it can be generalized to nn.Linear(num_ftrs, len(class_names)).
-model.classifier = nn.Linear(num_ftrs, len(LABELMAP))
-model = model.to(device)
-criterion = nn.CrossEntropyLoss()
-# Observe that only parameters of final layer are being optimized as opposed to before.
-optimizer = optim.SGD(model.classifier.parameters(), lr=LEARNRATE, momentum=0.9)
-# Decay LR by a factor of 0.1 every 7 epochs
-exp_lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size= round(BATCHSIZE/10) if (round(BATCHSIZE/10) >= 1) else 1, gamma=0.5)
+    if enable_comet:
+        with experiment.train():
+            model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=epochs, experiment=experiment)
+        experiment.end()
+    else:
+        model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=epochs)
 
+    ###############################################
 
-#%%-------------------#
-#   Train the model   #
-#---------------------#
-if ENABLECOMET:
-    with experiment.train():
-        model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=EPOCHS)
-    experiment.end()
-else:
-    model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=EPOCHS)
+    fig_save_path = save_dir + "/output.png"
 
+    ###############################################
 
-#%%---------------------------------------------------#
-#   Visualize some output on the validation dataset   #
-#-----------------------------------------------------#
-visualize_model(model,valid_loader, LABELMAP)
+    if save_weights:
+        mydir = os.path.join(os.getcwd(), save_dir, datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+        os.makedirs(mydir)
+        savedir = os.path.join(mydir, "weights.pth")
+        torch.save(model.state_dict(), os.path.join(save_dir, mydir, "weights.pth"))
+        print("Saved weights to: ", savedir)
 
+        torch.save(model.state_dict(), os.path.join(os.getcwd(), "wmslatest.pth"))
 
-#%%-------------------------#
-#   Save trained wheights   #
-#---------------------------#
-if SAVEWEIGHTS:
-    mydir = os.path.join(os.getcwd(), MODELPATH, datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
-    os.makedirs(mydir)
-    savedir = os.path.join(mydir, "weights.pth")
-    torch.save(model.state_dict(), os.path.join(MODELPATH, mydir, "weights.pth"))
-    print("Saved weights to: ", savedir)
+        fig_save_path = os.path.join(mydir, "output.png")
+        visualize_model(model,valid_loader, data['names'], fig_save_path, num_images=12) 
 
-    torch.save(model.state_dict(), os.path.join(os.getcwd(), "wmslatest.pth"))
-# %%
+if __name__ == "__main__":
+    opt = parse_opt()
+    main(opt)
