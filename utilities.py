@@ -2,17 +2,43 @@
 import os
 import time
 import torch
+# from comet_ml import Experiment
 from skimage import io
 from torch.utils.data import Dataset
 from torchvision import transforms
 import matplotlib.pyplot as plt
 from glob import glob
 import json
+import torch.nn as nn
+import torch.nn.functional as F
+
 
 
 dev_str = "cuda" if torch.cuda.is_available() else "cpu"
 dev_str = "cpu" if torch.has_mps else dev_str
 device = torch.device(dev_str)
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 5)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1) # flatten all dimensions except batch
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 #----------------------#
 #   Dataset creation   #
@@ -93,7 +119,7 @@ def imshow(inp, title=None):
         plt.title(title)
     plt.pause(0.001) 
 
-def visualize_model(model, dataloader, label_map, fig_save_path, num_images=6):
+def visualize_model(model, dataloader, label_map, fig_save_path, experiment, num_images=6):
     was_training = model.training
     model.eval()
     images_so_far = 0

@@ -37,6 +37,7 @@ ROOT = FILE.parents[0]  # <-- this is the root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
+P_NAME = "pytorch_classifier"
 
 dev_str = "cuda" if torch.cuda.is_available() else "cpu"
 dev_str = "cpu" if torch.has_mps else dev_str
@@ -139,12 +140,12 @@ def train_model(model, dataloaders, dataset_sizes, criterion, optimizer, schedul
 #---------------------#
 def parse_opt(known=False):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
-    parser.add_argument('--batch_size', type=int, default=64, help='batch size')
+    parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
+    parser.add_argument('--batch_size', type=int, default=16, help='batch size')
     parser.add_argument('--learn_rate', type=float, default=0.001, help='learning rate')
     parser.add_argument('--data', type=str, default=ROOT / 'data/fsoco.yaml', help='dataset.yaml path')
     parser.add_argument('--save_weights', type=bool, default=True, help='save weights')
-    parser.add_argument('--img_size', type=int, default=20, help='image size')
+    parser.add_argument('--img_size', type=int, default=32, help='image size')
     parser.add_argument('--enable_comet', type=bool, default=False, help='enable comet.ml')
     parser.add_argument('--device', default='', help='cuda, cpu or mps for Aplle devices')
     parser.add_argument('--save_dir', type=str, default='weights', help='directory to save weights')
@@ -213,8 +214,8 @@ def main(opt):
     if enable_comet:
         # Add your CometML info to track your training online
         experiment = Experiment(
-            api_key="",
-            project_name="",
+            api_key = os.environ['COMET_API_KEY'],
+            project_name = P_NAME,
             workspace="",
         )
         experiment.log_parameters(hyper_params)
@@ -237,19 +238,23 @@ def main(opt):
     # Loading the model
     # model = mobilenet_v3_large()
     # model = torchvision.models.mobilenet_v3_small(weights=True, width_mult=1.0,  reduced_tail=False, dilated=False)
-    model = mobilenet_v3_large(weights=MobileNet_V3_Large_QuantizedWeights, width_mult=1.0,  reduced_tail=False, dilated=False)
+    # model = mobilenet_v3_large(weights=MobileNet_V3_Large_QuantizedWeights, width_mult=1.0,  reduced_tail=False, dilated=False)
+
+    model = Net()
+    print("Number of model parameters: ", count_parameters(model))
 
     # Set training tools
-    for param in model.parameters():
-        param.requires_grad = False
-    # Parameters of newly constructed modules have requires_grad=True by default
-    num_ftrs = model.classifier[0].in_features
-    # Here the size of each output sample is set to 2. Alternatively, it can be generalized to nn.Linear(num_ftrs, len(class_names)).
-    model.classifier = nn.Linear(num_ftrs, data['nc'])
+    # for param in model.parameters():
+    #     param.requires_grad = False
+    # # Parameters of newly constructed modules have requires_grad=True by default
+    # num_ftrs = model.classifier[0].in_features
+    # # Here the size of each output sample is set to 2. Alternatively, it can be generalized to nn.Linear(num_ftrs, len(class_names)).
+    # model.classifier = nn.Linear(num_ftrs, data['nc'])
     model = model.to(device)
     criterion = nn.CrossEntropyLoss()
     # Observe that only parameters of final layer are being optimized as opposed to before.
-    optimizer = optim.SGD(model.classifier.parameters(), lr=learn_rate, momentum=0.9)
+    # optimizer = optim.SGD(model.classifier.parameters(), lr=learn_rate, momentum=0.9)
+    optimizer = optim.SGD(model.parameters(), lr=learn_rate, momentum=0.9)
     # Decay LR by a factor of 0.1 every 7 epochs
     exp_lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size= round(batch_size/10) if (round(batch_size/10) >= 1) else 1, gamma=0.5)
 
@@ -266,17 +271,22 @@ def main(opt):
 
     ###############################################
 
-    if save_weights:
-        mydir = os.path.join(os.getcwd(), save_dir, datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
-        os.makedirs(mydir)
-        savedir = os.path.join(mydir, "weights.pth")
-        torch.save(model.state_dict(), os.path.join(save_dir, mydir, "weights.pth"))
-        print("Saved weights to: ", savedir)
+    # if save_weights:
+    folder_name = P_NAME + "_" + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    mydir = os.path.join(os.getcwd(), save_dir, folder_name)
+    os.makedirs(mydir)
+    savedir = os.path.join(mydir, "weights.pth")
+    torch.save(model.state_dict(), os.path.join(save_dir, mydir, "weights.pth"))
+    print("Saved weights to: ", savedir)
 
-        torch.save(model.state_dict(), os.path.join(os.getcwd(), "wmslatest.pth"))
+    torch.save(model.state_dict(), os.path.join(os.getcwd(), "wmslatest.pth"))
 
-        fig_save_path = os.path.join(mydir, "output.png")
-        visualize_model(model,valid_loader, data['names'], fig_save_path, num_images=12) 
+    fig_save_path = os.path.join(mydir, "output.png")
+    visualize_model(model,valid_loader, data['names'], fig_save_path, experiment, num_images=12) 
+    if enable_comet:
+        experiment.log_image(fig_save_path)
+        # print("Logged image to CometML: ", fig_save_path)
+        experiment.end()
 
 if __name__ == "__main__":
     opt = parse_opt()
