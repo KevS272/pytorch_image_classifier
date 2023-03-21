@@ -4,10 +4,8 @@
 # https://pytorch.org/tutorials/beginner/data_loading_tutorial.html
 # https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
 # https://github.com/asabuncuoglu13/custom-vision-pytorch-mobile/blob/main/torch_transfer_learning_mobilenet3.ipynb
+#https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
 
-#%%-------------------------------------#
-#   Import libraries and set settings   #
-#---------------------------------------#
 from __future__ import print_function, division
 import torch
 from skimage import io
@@ -32,21 +30,36 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore")
 plt.ion()   # interactive mode
 
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # <-- this is the root directory
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
+# Set project name
 P_NAME = "pytorch_classifier"
 
+# Set root path
+FILE = Path(__file__).resolve()
+ROOT = FILE.parents[0]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
+
+# Set device for pytorch
 dev_str = "cuda" if torch.cuda.is_available() else "cpu"
 dev_str = "cpu" if torch.has_mps else dev_str
 device = torch.device(dev_str)
 print("Used device for training: ",device)
 
-#%%-----------------------------------------------#
-#   Define data directories and hyperparameters   #
-#-------------------------------------------------#
+#----------------------------#
+#   Parse arguments method   #
+#----------------------------#
+def parse_opt(known=False):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
+    parser.add_argument('--batch_size', type=int, default=16, help='batch size')
+    parser.add_argument('--learn_rate', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/dataset.yaml', help='dataset.yaml path')
+    parser.add_argument('--img_size', type=int, default=32, help='image size')
+    parser.add_argument('--enable_comet', type=bool, default=True, help='enable comet.ml')
+    parser.add_argument('--save_dir', type=str, default='weights', help='directory to save weights')
+
+    return parser.parse_known_args()[0] if known else parser.parse_args()
 
 
 #%%----------------------#
@@ -134,45 +147,22 @@ def train_model(model, dataloaders, dataset_sizes, criterion, optimizer, schedul
     model.load_state_dict(best_model_wts)
     return model
 
-
-#%%-------------------#
-#   Parse arguments   #
-#---------------------#
-def parse_opt(known=False):
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
-    parser.add_argument('--batch_size', type=int, default=16, help='batch size')
-    parser.add_argument('--learn_rate', type=float, default=0.001, help='learning rate')
-    parser.add_argument('--data', type=str, default=ROOT / 'data/fsoco.yaml', help='dataset.yaml path')
-    parser.add_argument('--save_weights', type=bool, default=True, help='save weights')
-    parser.add_argument('--img_size', type=int, default=32, help='image size')
-    parser.add_argument('--enable_comet', type=bool, default=False, help='enable comet.ml')
-    parser.add_argument('--device', default='', help='cuda, cpu or mps for Aplle devices')
-    parser.add_argument('--save_dir', type=str, default='weights', help='directory to save weights')
-
-    return parser.parse_known_args()[0] if known else parser.parse_args()
-
+#-----------------#
+#   Main method   #
+#-----------------#
 def main(opt):
+
     print("Train args: ", vars(opt))
+    epochs, batch_size, learn_rate, data, img_size, enable_comet, save_dir = opt.epochs, opt.batch_size, opt.learn_rate, opt.data, opt.img_size, opt.enable_comet, opt.save_dir
 
-    epochs, batch_size, learn_rate, data, save_weights, img_size, enable_comet, device, save_dir = opt.epochs, opt.batch_size, opt.learn_rate, opt.data, opt.save_weights, opt.img_size, opt.enable_comet, opt.device, opt.save_dir
-
-    if device == '':
-        dev_str = "cuda" if torch.cuda.is_available() else "cpu"
-        dev_str = "cpu" if torch.has_mps else dev_str
-        device = torch.device(dev_str)
-    else:
-        device = torch.device(device)
-    print("Used device for training: ",device)
-
-######################################################################################
-
+    # Read data.yaml file to get classes, classes count, train and val paths
     with open(data, "r") as stream:
         try:
             data = yaml.safe_load(stream)
         except yaml.YAMLError as exc:
             print(exc)
 
+    # Some validation that was done in the original YOLO repo. Maybe not necessary TODO: check if this can be removed
     for k in 'train', 'val', 'names':
         assert k in data, f" data.yaml '{k}:' field missing"
     if isinstance(data['names'], (list, tuple)):  # old array format
@@ -180,10 +170,11 @@ def main(opt):
     assert all(isinstance(k, int) for k in data['names'].keys()), 'data.yaml names keys must be integers, i.e. 2: car'
     data['nc'] = len(data['names'])
 
+    # Prepend root to path
     path = Path(data.get('path'))
     if not path.is_absolute():
         path = (ROOT / path).resolve()
-        data['path'] = path  # download scripts
+        data['path'] = path
     for k in 'train', 'val', 'test':
         if data.get(k):  # prepend path
             if isinstance(data[k], str):
@@ -194,13 +185,13 @@ def main(opt):
             else:
                 data[k] = [str((path / x).resolve()) for x in data[k]]
 
+    # Get train and val paths
     train_path, val_path = data['train'], data['val']
 
     print("train_path: ", train_path)
     print("val_path: ", val_path)
 
-######################################################################################
-
+    # Define hyperparameters for cometML logging
     hyper_params = {
         # "sequence_length": 28,
         "input_size": img_size,
@@ -211,6 +202,8 @@ def main(opt):
         "num_epochs": epochs,
         "learning_rate": learn_rate
     }
+
+    # Create cometML experiment and start logging
     if enable_comet:
         # Add your CometML info to track your training online
         experiment = Experiment(
@@ -220,44 +213,36 @@ def main(opt):
         )
         experiment.log_parameters(hyper_params)
 
-######################################################################################
-
-    # TODO: Change Dataset class to work with the json format
+    # Create datasets
     ds_train = Dataset_classifier(data_path=train_path, rescale=img_size, transform=True)
     ds_valid = Dataset_classifier(data_path=val_path, rescale=img_size, transform=True)
 
     print("Train dataset size: ", ds_train.__len__())
     print("Validation dataset size: ", ds_valid.__len__())
 
+    # Create dataloaders from datasets
     train_loader = DataLoader(dataset=ds_train, batch_size=batch_size, shuffle=True)
     valid_loader = DataLoader(dataset=ds_valid, batch_size=batch_size, shuffle=True)
 
     dataloaders   = {'train': train_loader,  'val': valid_loader }
     dataset_sizes = {'train': len(ds_train), 'val': len(ds_valid)}
 
-    # Loading the model
-    # model = mobilenet_v3_large()
-    # model = torchvision.models.mobilenet_v3_small(weights=True, width_mult=1.0,  reduced_tail=False, dilated=False)
-    # model = mobilenet_v3_large(weights=MobileNet_V3_Large_QuantizedWeights, width_mult=1.0,  reduced_tail=False, dilated=False)
-
+    # Loading the model (LeNet)
     model = Net()
     print("Number of model parameters: ", count_parameters(model))
 
-    # Set training tools
-    # for param in model.parameters():
-    #     param.requires_grad = False
-    # # Parameters of newly constructed modules have requires_grad=True by default
-    # num_ftrs = model.classifier[0].in_features
-    # # Here the size of each output sample is set to 2. Alternatively, it can be generalized to nn.Linear(num_ftrs, len(class_names)).
-    # model.classifier = nn.Linear(num_ftrs, data['nc'])
+    # Move model to device
     model = model.to(device)
+
+    # Set loss function
     criterion = nn.CrossEntropyLoss()
-    # Observe that only parameters of final layer are being optimized as opposed to before.
-    # optimizer = optim.SGD(model.classifier.parameters(), lr=learn_rate, momentum=0.9)
+
+    # Set optimizer
     optimizer = optim.SGD(model.parameters(), lr=learn_rate, momentum=0.9)
     # Decay LR by a factor of 0.1 every 7 epochs
     exp_lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size= round(batch_size/10) if (round(batch_size/10) >= 1) else 1, gamma=0.5)
 
+    # Start training
     if enable_comet:
         with experiment.train():
             model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=epochs, experiment=experiment)
@@ -265,13 +250,10 @@ def main(opt):
     else:
         model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=epochs)
 
-    ###############################################
 
+    # Save model weights and output image
     fig_save_path = save_dir + "/output.png"
 
-    ###############################################
-
-    # if save_weights:
     folder_name = P_NAME + "_" + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     mydir = os.path.join(os.getcwd(), save_dir, folder_name)
     os.makedirs(mydir)
@@ -285,8 +267,8 @@ def main(opt):
     visualize_model(model,valid_loader, data['names'], fig_save_path, experiment, num_images=12) 
     if enable_comet:
         experiment.log_image(fig_save_path)
-        # print("Logged image to CometML: ", fig_save_path)
         experiment.end()
+
 
 if __name__ == "__main__":
     opt = parse_opt()

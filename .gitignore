@@ -2,3 +2,6 @@ data/*
 weights/*
 *.pth
 __pycache__
+utils/cone_img_extractor/data/*
+utils/cone_img_extractor/datasets/*
+utils/cone_img_extractor/extracted/*
