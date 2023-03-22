@@ -154,6 +154,7 @@ def main(opt):
     epochs, batch_size, learn_rate, data, img_size, enable_comet, save_dir, analyze_data = opt.epochs, opt.batch_size, opt.learn_rate, opt.data, opt.img_size, opt.enable_comet, opt.save_dir, opt.analyze_data
 
     # Read data.yaml file to get classes, classes count, train and val paths
+    data_path = data
     with open(data, "r") as stream:
         try:
             data = yaml.safe_load(stream)
@@ -251,14 +252,17 @@ def main(opt):
     # Visualize model predictions and save the figure
     fig_path = visualize_model(model,valid_loader, data['names'], save_dir, num_images=12) 
     
+    # Run model on validation dataset and get confusion matrix
+    pred_list, label_list = cm_val_run(model, ds_valid, data['names'])
+
     # Log the additional stuff to cometML and end the experiment
     if enable_comet:
         experiment.log_image(fig_path)
         experiment.log_code(os.path.join(os.getcwd(), "utilities.py"))
         experiment.log_asset(os.path.join(os.getcwd(), "latest.pth"))
-        experiment.log_asset(data)
+        experiment.log_asset(data_path)
+        experiment.log_confusion_matrix(label_list, pred_list)
         experiment.end()
-
 
 if __name__ == "__main__":
     opt = parse_opt()

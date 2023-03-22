@@ -11,6 +11,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pathlib import Path
 import sys
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 # Set root path
 FILE = Path(__file__).resolve()
@@ -208,3 +210,29 @@ def visualize_model(model, dataloader, label_map, save_dir, num_images=6):
                     fig.savefig(str(fig_save_path))
                     return fig_save_path
         model.train(mode=was_training)
+
+def cm_val_run(model, dataset, label_map):
+    dataloader = DataLoader(dataset=dataset, batch_size=1, shuffle=True)
+
+    pred_list = []
+    label_list = []
+
+    was_training = model.training
+    model.eval()
+
+    print("Creating confusion matrix...")
+    with torch.no_grad():
+        for d in tqdm(dataloader):
+            inputs = d['image'].to(device)
+
+            outputs = model(inputs)
+            _, preds = torch.max(outputs, 1)
+            # pred_list.append(label_map[preds.item()])
+            # label_list.append(label_map[d['label'].item()])
+
+            pred_list.append(preds.item())
+            label_list.append(d['label'].item())
+    
+        model.train(mode=was_training)
+
+    return pred_list, label_list
