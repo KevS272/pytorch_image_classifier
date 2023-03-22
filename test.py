@@ -62,6 +62,10 @@ def main(opt):
     #   Evaluate model on test data   #
     #---------------------------------#
     running_corrects = 0
+
+    correct_pred = {classname: 0 for classname in data['names']}
+    total_pred = {classname: 0 for classname in data['names']}
+
     was_training = model.training
     model.eval()
 
@@ -78,6 +82,11 @@ def main(opt):
             outputs = model(inputs)
             _, preds = torch.max(outputs, 1)
 
+            for label, pred in zip(labels, preds):
+                if label == pred:
+                    correct_pred[label.item()] += 1
+                total_pred[label.item()] += 1
+
             running_corrects += torch.sum(preds == labels.data)
         
         model.train(mode=was_training)
@@ -85,11 +94,17 @@ def main(opt):
         
     time_elapsed = time.time() - since
 
-    print("Test accuracy: {:.4f}".format(test_acc))
-    print("Test completed in {:.0f}m {:.4f}s".format(
-            time_elapsed // 60, time_elapsed % 60))
+    print('─' * 16)
+    print("─ TEST RESULTS ─")
+    print('─' * 16)
+    print("Test accuracy (total): {:.4f}".format(test_acc))
+    for classname, correct_count in correct_pred.items():
+        accuracy = float(correct_count) / total_pred[classname]
+        print(f"Test Accuracy for class \'{data['names'][classname]:5s}\': {accuracy:.4f}")
+    print('─' * 16)
+    print("Test completed in {:.0f}m {:.4f}s".format(time_elapsed // 60, time_elapsed % 60))
     print("Average time per image: {:.4f}ms".format(time_elapsed / num_samples * 1000))
-
+    print('─' * 16)
 
 if __name__ == "__main__":
     opt = parse_opt()
