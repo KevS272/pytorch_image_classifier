@@ -217,7 +217,6 @@ def main(opt):
     else:
         model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=epochs)
 
-
     # Save model weights
     folder_name = P_NAME + "_" + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     save_dir = os.path.join(os.getcwd(), save_dir, folder_name)
@@ -226,9 +225,11 @@ def main(opt):
     # Visualize model predictions and save the figure
     fig_path = visualize_model(model,valid_loader, data['names'], save_dir, num_images=12) 
     
-    # Log the figure to cometML and end the experiment
+    # Log the additional stuff to cometML and end the experiment
     if enable_comet:
         experiment.log_image(fig_path)
+        experiment.log_code(os.path.join(os.getcwd(), "utilities.py"))
+        experiment.log_asset(os.path.join(os.getcwd(), "latest.pth"))
         experiment.end()
 
 
