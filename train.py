@@ -23,8 +23,9 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import yaml
 import datetime
+from collections import Counter, OrderedDict
 warnings.filterwarnings("ignore")
-plt.ion()   # interactive mode
+#plt.ion()   # interactive mode
 
 # Set project name
 P_NAME = "pytorch_classifier"
@@ -54,6 +55,7 @@ def parse_opt(known=False):
     parser.add_argument('--img_size', type=int, default=32, help='image size')
     parser.add_argument('--enable_comet', action='store_true', help='enable comet.ml')
     parser.add_argument('--save_dir', type=str, default='weights', help='directory to save weights')
+    parser.add_argument('--analyze_data', action='store_false', help='analyzes class distribution of dataset')
 
     return parser.parse_known_args()[0] if known else parser.parse_args()
 
@@ -149,7 +151,7 @@ def train_model(model, dataloaders, dataset_sizes, criterion, optimizer, schedul
 def main(opt):
 
     print("Train args: ", vars(opt))
-    epochs, batch_size, learn_rate, data, img_size, enable_comet, save_dir = opt.epochs, opt.batch_size, opt.learn_rate, opt.data, opt.img_size, opt.enable_comet, opt.save_dir
+    epochs, batch_size, learn_rate, data, img_size, enable_comet, save_dir, analyze_data = opt.epochs, opt.batch_size, opt.learn_rate, opt.data, opt.img_size, opt.enable_comet, opt.save_dir, opt.analyze_data
 
     # Read data.yaml file to get classes, classes count, train and val paths
     with open(data, "r") as stream:
@@ -183,9 +185,32 @@ def main(opt):
         )
         experiment.log_parameters(hyper_params)
 
+    # Create directory to save training artifacts
+    folder_name = P_NAME + "_" + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    save_dir = os.path.join(os.getcwd(), save_dir, folder_name)
+    os.makedirs(save_dir)
+
     # Create datasets
     ds_train = Dataset_classifier(data_path=train_path, rescale=img_size, transform=True)
     ds_valid = Dataset_classifier(data_path=val_path, rescale=img_size, transform=True)
+
+    # Analyze the dataset class distribution and create a plot for it
+    if(analyze_data):
+        print("Analyze dataset class distribution ...")
+        class_dist_train = dict(Counter(ds_train.__getitem__(x, only_label=True)['label'].item() for x in range(0, ds_train.__len__())))
+        print("Class distribution in training dataset: ", class_dist_train)
+        plt.bar(range(len(class_dist_train)), list(dict(sorted(class_dist_train.items())).values()), tick_label=list(data['names'][x] for x in dict(sorted(class_dist_train.items()))))
+
+        class_dist_valid = dict(Counter(ds_valid.__getitem__(x, only_label=True)['label'].item() for x in range(0, ds_valid.__len__())))
+        print("Class distribution in validation dataset: ", class_dist_valid)
+        plt.bar(range(len(class_dist_valid)), list(dict(sorted(class_dist_valid.items())).values()), tick_label=list(data['names'][x] for x in dict(sorted(class_dist_valid.items()))))
+        plt.title('Class distribution in dataset')
+        colors = {'train':'tab:blue', 'valid':'tab:orange'}         
+        labels = list(colors.keys())
+        handles = [plt.Rectangle((0,0),1,1, color=colors[label]) for label in labels]
+        plt.legend(handles, labels)
+        plt.savefig(os.path.join(save_dir,"class_distribution.png"))
+        experiment.log_image(os.path.join(save_dir,"class_distribution.png"))
 
     print("Train dataset size: ", ds_train.__len__())
     print("Validation dataset size: ", ds_valid.__len__())
@@ -218,8 +243,6 @@ def main(opt):
         model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=epochs)
 
     # Save model weights
-    folder_name = P_NAME + "_" + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    save_dir = os.path.join(os.getcwd(), save_dir, folder_name)
     save_weights(model, save_dir)
     
     # Visualize model predictions and save the figure

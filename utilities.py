@@ -69,28 +69,38 @@ class Dataset_classifier(Dataset):
     def __len__(self):
         return len(self.label_list)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx, only_label=False):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
         if os.path.splitext(self.image_list[idx])[0] in self.label_list:
-            img_path = self.image_path + "/" + self.image_list[idx]
-            image = io.imread(img_path)
-            if self.transform == True:
-                # ChosenTransforms = transforms.Compose([transforms.ToTensor(),
-                #     transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225]),])            
-                ChosenTransforms = transforms.Compose(
-                    [transforms.ToTensor(),
-                    transforms.Resize((self.rescale, self.rescale)),
-                    transforms.Normalize(mean=[0.0, 0.0, 0.0],std=[1.0, 1.0, 1.0])])
-                image = ChosenTransforms(image)
 
-            label_path = self.label_path + "/" + os.path.splitext(self.image_list[idx])[0] + ".json"
-            f = open(label_path)
-            data = json.load(f)
-            label = data['class_id']
-            label = torch.tensor(label)
-            sample = {'image': image, 'label': label}
+            if only_label:
+                label_path = self.label_path + "/" + os.path.splitext(self.image_list[idx])[0] + ".json"
+                f = open(label_path)
+                data = json.load(f)
+                label = data['class_id']
+                label = torch.tensor(label)
+                sample = {'label': label}
+            else:
+                img_path = self.image_path + "/" + self.image_list[idx]
+                image = io.imread(img_path)
+
+                if self.transform == True:
+                    # ChosenTransforms = transforms.Compose([transforms.ToTensor(),
+                    #     transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225]),])            
+                    ChosenTransforms = transforms.Compose(
+                        [transforms.ToTensor(),
+                        transforms.Resize((self.rescale, self.rescale)),
+                        transforms.Normalize(mean=[0.0, 0.0, 0.0],std=[1.0, 1.0, 1.0])])
+                    image = ChosenTransforms(image)
+
+                label_path = self.label_path + "/" + os.path.splitext(self.image_list[idx])[0] + ".json"
+                f = open(label_path)
+                data = json.load(f)
+                label = data['class_id']
+                label = torch.tensor(label)
+                sample = {'image': image, 'label': label}
 
         return sample
 
@@ -129,12 +139,12 @@ def get_data_paths(data, test=False):
         return data['test']
     else:
         return  data['train'], data['val']
-    
+
+
 #---------------------------#
 #   Save training outputs   #
 #---------------------------#
 def save_weights(model, save_dir):
-    os.makedirs(save_dir)
     save_dir = os.path.join(save_dir, "weights.pth")
     torch.save(model.state_dict(), save_dir)
     print("Saved weights to: ", save_dir)
