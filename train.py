@@ -4,29 +4,25 @@
 # https://pytorch.org/tutorials/beginner/data_loading_tutorial.html
 # https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
 # https://github.com/asabuncuoglu13/custom-vision-pytorch-mobile/blob/main/torch_transfer_learning_mobilenet3.ipynb
-#https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
+# https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
 
-from __future__ import print_function, division
+from comet_ml import Experiment
 import torch
-from skimage import io
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 import torch.nn as nn
 import torch.optim as optim
-from torchvision.models.quantization import mobilenet_v3_large, MobileNet_V3_Large_QuantizedWeights
-from torchvision.models.quantization import mobilenet_v2, MobileNet_V2_QuantizedWeights
 import warnings # Ignore warnings
-from comet_ml import Experiment
 from utilities import *
 import time
-import datetime
 import copy
 import argparse
 import sys
 from pathlib import Path
-import yaml
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import yaml
+import datetime
 warnings.filterwarnings("ignore")
 plt.ion()   # interactive mode
 
@@ -56,7 +52,7 @@ def parse_opt(known=False):
     parser.add_argument('--learn_rate', type=float, default=0.001, help='learning rate')
     parser.add_argument('--data', type=str, default=ROOT / 'data/dataset.yaml', help='dataset.yaml path')
     parser.add_argument('--img_size', type=int, default=32, help='image size')
-    parser.add_argument('--enable_comet', type=bool, default=True, help='enable comet.ml')
+    parser.add_argument('--enable_comet', action='store_true', help='enable comet.ml')
     parser.add_argument('--save_dir', type=str, default='weights', help='directory to save weights')
 
     return parser.parse_known_args()[0] if known else parser.parse_args()
@@ -162,41 +158,15 @@ def main(opt):
         except yaml.YAMLError as exc:
             print(exc)
 
-    # Some validation that was done in the original YOLO repo. Maybe not necessary TODO: check if this can be removed
-    for k in 'train', 'val', 'names':
-        assert k in data, f" data.yaml '{k}:' field missing"
-    if isinstance(data['names'], (list, tuple)):  # old array format
-        data['names'] = dict(enumerate(data['names']))  # convert to dict
-    assert all(isinstance(k, int) for k in data['names'].keys()), 'data.yaml names keys must be integers, i.e. 2: car'
-    data['nc'] = len(data['names'])
+    # Get data paths from data.yaml file
+    train_path, val_path = get_data_paths(data)    
 
-    # Prepend root to path
-    path = Path(data.get('path'))
-    if not path.is_absolute():
-        path = (ROOT / path).resolve()
-        data['path'] = path
-    for k in 'train', 'val', 'test':
-        if data.get(k):  # prepend path
-            if isinstance(data[k], str):
-                x = (path / data[k]).resolve()
-                if not x.exists() and data[k].startswith('../'):
-                    x = (path / data[k][3:]).resolve()
-                data[k] = str(x)
-            else:
-                data[k] = [str((path / x).resolve()) for x in data[k]]
-
-    # Get train and val paths
-    train_path, val_path = data['train'], data['val']
-
-    print("train_path: ", train_path)
-    print("val_path: ", val_path)
+    print("Training data path: ", train_path)
+    print("Validation data path: ", val_path)
 
     # Define hyperparameters for cometML logging
     hyper_params = {
-        # "sequence_length": 28,
         "input_size": img_size,
-        # "hidden_size": 128,
-        # "num_layers": 2,
         "num_classes": data['nc'],
         "batch_size": batch_size,
         "num_epochs": epochs,
@@ -228,15 +198,13 @@ def main(opt):
     dataset_sizes = {'train': len(ds_train), 'val': len(ds_valid)}
 
     # Loading the model (LeNet)
-    model = Net()
+    model = LeNet()
     print("Number of model parameters: ", count_parameters(model))
 
     # Move model to device
     model = model.to(device)
-
     # Set loss function
     criterion = nn.CrossEntropyLoss()
-
     # Set optimizer
     optimizer = optim.SGD(model.parameters(), lr=learn_rate, momentum=0.9)
     # Decay LR by a factor of 0.1 every 7 epochs
@@ -246,27 +214,21 @@ def main(opt):
     if enable_comet:
         with experiment.train():
             model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=epochs, experiment=experiment)
-        experiment.end()
     else:
         model = train_model(model,dataloaders, dataset_sizes, criterion, optimizer, exp_lr_scheduler, num_epochs=epochs)
 
 
-    # Save model weights and output image
-    fig_save_path = save_dir + "/output.png"
-
+    # Save model weights
     folder_name = P_NAME + "_" + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    mydir = os.path.join(os.getcwd(), save_dir, folder_name)
-    os.makedirs(mydir)
-    savedir = os.path.join(mydir, "weights.pth")
-    torch.save(model.state_dict(), os.path.join(save_dir, mydir, "weights.pth"))
-    print("Saved weights to: ", savedir)
-
-    torch.save(model.state_dict(), os.path.join(os.getcwd(), "wmslatest.pth"))
-
-    fig_save_path = os.path.join(mydir, "output.png")
-    visualize_model(model,valid_loader, data['names'], fig_save_path, experiment, num_images=12) 
+    save_dir = os.path.join(os.getcwd(), save_dir, folder_name)
+    save_weights(model, save_dir)
+    
+    # Visualize model predictions and save the figure
+    fig_path = visualize_model(model,valid_loader, data['names'], save_dir, num_images=12) 
+    
+    # Log the figure to cometML and end the experiment
     if enable_comet:
-        experiment.log_image(fig_save_path)
+        experiment.log_image(fig_path)
         experiment.end()
 
 

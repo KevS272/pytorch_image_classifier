@@ -1,8 +1,6 @@
 #!usr/bin/env python
 import os
-import time
 import torch
-# from comet_ml import Experiment
 from skimage import io
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -11,14 +9,22 @@ from glob import glob
 import json
 import torch.nn as nn
 import torch.nn.functional as F
+from pathlib import Path
+import sys
 
+# Set root path
+FILE = Path(__file__).resolve()
+ROOT = FILE.parents[0]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
-
+# Set device for pytorch
 dev_str = "cuda" if torch.cuda.is_available() else "cpu"
 dev_str = "cpu" if torch.has_mps else dev_str
 device = torch.device(dev_str)
 
-class Net(nn.Module):
+class LeNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 6, 5)
@@ -88,6 +94,52 @@ class Dataset_classifier(Dataset):
 
         return sample
 
+#----------------------------------------#
+#   Get the right data paths from yaml   #
+#----------------------------------------#
+def get_data_paths(data, test=False):
+    # Some validation that was done in the original YOLO repo. Maybe not necessary TODO: check if this can be removed
+    if test:
+        for k in 'test', 'names':
+            assert k in data, f" data.yaml '{k}:' field missing"
+    else:
+        for k in 'train', 'val', 'names':
+            assert k in data, f" data.yaml '{k}:' field missing"
+    if isinstance(data['names'], (list, tuple)):  # old array format
+        data['names'] = dict(enumerate(data['names']))  # convert to dict
+    assert all(isinstance(k, int) for k in data['names'].keys()), 'data.yaml names keys must be integers, i.e. 2: car'
+    data['nc'] = len(data['names'])
+
+    # Prepend root to path
+    path = Path(data.get('path'))
+    if not path.is_absolute():
+        path = (ROOT / path).resolve()
+        data['path'] = path
+    for k in 'train', 'val', 'test':
+        if data.get(k):  # prepend path
+            if isinstance(data[k], str):
+                x = (path / data[k]).resolve()
+                if not x.exists() and data[k].startswith('../'):
+                    x = (path / data[k][3:]).resolve()
+                data[k] = str(x)
+            else:
+                data[k] = [str((path / x).resolve()) for x in data[k]]
+
+    if test:
+        return data['test']
+    else:
+        return  data['train'], data['val']
+    
+#---------------------------#
+#   Save training outputs   #
+#---------------------------#
+def save_weights(model, save_dir):
+    os.makedirs(save_dir)
+    save_dir = os.path.join(save_dir, "weights.pth")
+    torch.save(model.state_dict(), save_dir)
+    print("Saved weights to: ", save_dir)
+    # Additionally save the currently newest weights to root directory
+    torch.save(model.state_dict(), os.path.join(os.getcwd(), "latest.pth"))
 
 #---------------------------#
 #   Visualization methods   #
@@ -119,7 +171,7 @@ def imshow(inp, title=None):
         plt.title(title)
     plt.pause(0.001) 
 
-def visualize_model(model, dataloader, label_map, fig_save_path, experiment, num_images=6):
+def visualize_model(model, dataloader, label_map, save_dir, num_images=6):
     was_training = model.training
     model.eval()
     images_so_far = 0
@@ -142,40 +194,7 @@ def visualize_model(model, dataloader, label_map, fig_save_path, experiment, num
 
                 if images_so_far == num_images:
                     model.train(mode=was_training)
-                    print("Figure save path:", fig_save_path)
+                    fig_save_path = os.path.join(save_dir, "val_output.png")
                     fig.savefig(str(fig_save_path))
-                    return
+                    return fig_save_path
         model.train(mode=was_training)
-
-
-#--------------------------------#
-#   Measure accuracy for model   #
-#--------------------------------#
-
-def test_model(model, dataloader):
-    running_corrects = 0
-    was_training = model.training
-    model.eval()
-
-    since = time.time()
-    with torch.no_grad():
-        
-        num_samples = len(dataloader.dataset)
-        print("Number of samples in test set: ", num_samples)
-
-        for d in dataloader:
-            inputs = d['image'].to(device)
-            labels = d['label'].to(device)
-
-            outputs = model(inputs)
-            _, preds = torch.max(outputs, 1)
-
-            running_corrects += torch.sum(preds == labels.data)
-        
-        model.train(mode=was_training)
-        test_acc = running_corrects.double() / num_samples
-        
-    time_elapsed = time.time() - since
-    print("Test accuracy: {:.4f}".format(test_acc))
-    print('Test completed in {:.0f}m {:.0f}s'.format(
-        time_elapsed // 60, time_elapsed % 60))
