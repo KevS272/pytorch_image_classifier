@@ -210,7 +210,10 @@ def main(opt):
         handles = [plt.Rectangle((0,0),1,1, color=colors[label]) for label in labels]
         plt.legend(handles, labels)
         plt.savefig(os.path.join(save_dir,"class_distribution.png"))
-        experiment.log_image(os.path.join(save_dir,"class_distribution.png"))
+        if enable_comet:
+            experiment.log_image(os.path.join(save_dir,"class_distribution.png"))
+            experiment.log_metrics(class_dist_train, prefix="train class distribution")
+            experiment.log_metrics(class_dist_valid, prefix="valid class distribution")
 
     print("Train dataset size: ", ds_train.__len__())
     print("Validation dataset size: ", ds_valid.__len__())
@@ -253,6 +256,7 @@ def main(opt):
         experiment.log_image(fig_path)
         experiment.log_code(os.path.join(os.getcwd(), "utilities.py"))
         experiment.log_asset(os.path.join(os.getcwd(), "latest.pth"))
+        experiment.log_asset(data)
         experiment.end()
 
 
