@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 import torch.nn as nn
 import torch.optim as optim
 import warnings # Ignore warnings
-from utilities import *
+from utils.utilities import *
 import time
 import copy
 import argparse

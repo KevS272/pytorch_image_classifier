@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from utilities import *
+from utils.utilities import *
 from torch.utils.data import DataLoader
 import time
 from tqdm import tqdm
